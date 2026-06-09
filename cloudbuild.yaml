@@ -1,0 +1,10 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - build
+      - --platform=linux/amd64
+      - -t=$_IMAGE
+      - -f=backend/Dockerfile
+      - .
+images:
+  - $_IMAGE

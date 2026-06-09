@@ -17,7 +17,12 @@ _shape_cache: dict[str, list] = {}
 # Negative cache: routes with no shape in Digitransit (don't retry)
 _no_shape: set[str] = set()
 
-_QUERY = '{routes(ids:["%s"]){patterns{geometry{lat lon}}}}'
+# Stop caches
+_stops_cache: dict[str, list] = {}
+_no_stops: set[str] = set()
+
+_QUERY       = '{routes(ids:["%s"]){patterns{geometry{lat lon}}}}'
+_STOPS_QUERY = '{routes(ids:["%s"]){patterns{stops{name code lat lon}}}}'
 
 
 def _candidate_ids(route_number: str) -> list[str]:
@@ -97,3 +102,65 @@ async def get_route_shape(route_number: str):
 
     _no_shape.add(route_number)
     raise HTTPException(status_code=404, detail=f"No shape found for route {route_number}")
+
+
+async def _fetch_stops_one(client: httpx.AsyncClient, hsl_id: str, headers: dict) -> list | None:
+    """Fetch stops for a single HSL route ID. Returns list of stop dicts or None."""
+    async with _SEMAPHORE:
+        try:
+            resp = await client.post(
+                _ENDPOINT,
+                json={"query": _STOPS_QUERY % hsl_id},
+                headers=headers,
+            )
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            logger.debug("Digitransit stops HTTP %s for %s", e.response.status_code, hsl_id)
+            return None
+        except Exception as e:
+            logger.warning("Digitransit stops error for %s: %s", hsl_id, e)
+            return None
+
+    routes = (resp.json().get("data") or {}).get("routes") or []
+    route = next((r for r in routes if r), None)
+    if not route:
+        return None
+
+    patterns = route.get("patterns") or []
+    if not patterns:
+        return None
+
+    # Pick the pattern with the most stops
+    best = max(patterns, key=lambda p: len(p.get("stops") or []))
+    stops = best.get("stops") or []
+    if not stops:
+        return None
+
+    return [
+        {"name": s["name"], "code": s.get("code", ""), "lat": s["lat"], "lon": s["lon"]}
+        for s in stops
+    ]
+
+
+@router.get("/api/route-stops/{route_number}")
+async def get_route_stops(route_number: str):
+    if route_number in _stops_cache:
+        return {"stops": _stops_cache[route_number]}
+
+    if route_number in _no_stops:
+        raise HTTPException(status_code=404, detail=f"No stops for route {route_number}")
+
+    headers = {
+        "Content-Type": "application/json",
+        "digitransit-subscription-key": settings.digitransit_api_key,
+    }
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for hsl_id in _candidate_ids(route_number):
+            stops = await _fetch_stops_one(client, hsl_id, headers)
+            if stops:
+                _stops_cache[route_number] = stops
+                return {"stops": stops}
+
+    _no_stops.add(route_number)
+    raise HTTPException(status_code=404, detail=f"No stops found for route {route_number}")
