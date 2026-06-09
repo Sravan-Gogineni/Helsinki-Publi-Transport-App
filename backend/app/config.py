@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     gcp_project_id: str = "project-b2f8b5ee-abac-4b3f-940"
     pubsub_subscription: str = "vh-details"
     google_maps_api_key: str = ""
+    digitransit_api_key: str = ""
 
     vehicle_timeout_seconds: int = 300
     stats_broadcast_interval: int = 1

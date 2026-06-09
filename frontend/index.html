@@ -211,15 +211,17 @@
     }
     #route-clear-btn:hover, #route-close-btn:hover { color: #c9d1e0; }
 
-    #doors-toggle {
+    #doors-toggle, #routes-toggle {
       width: 100%; padding: 5px 10px; border-radius: 6px; font-size: 12px; font-weight: 500;
       border: 1px solid #3d4259; background: #0f1117; color: #9aa0b4;
       cursor: pointer; display: flex; align-items: center; gap: 7px;
       transition: all 0.15s;
     }
-    #doors-toggle:hover { border-color: #5f6580; color: #c9d1e0; }
+    #doors-toggle:hover, #routes-toggle:hover { border-color: #5f6580; color: #c9d1e0; }
     #doors-toggle.active { border-color: #fbbc04; color: #fbbc04; background: rgba(251,188,4,0.08); }
     #doors-toggle .toggle-check { margin-left: auto; font-size: 11px; }
+    #routes-toggle.active { border-color: #4285f4; color: #4285f4; background: rgba(66,133,244,0.08); }
+    #routes-toggle .toggle-check { margin-left: auto; font-size: 11px; }
 
     /* ── Leaflet overrides ── */
     .leaflet-tile-pane { filter: brightness(0.95); }
@@ -324,6 +326,13 @@
           <span class="toggle-check" id="doors-check" style="display:none">✓</span>
         </button>
       </div>
+      <div style="margin-top:8px">
+        <button id="routes-toggle">
+          <span>🗺</span>
+          <span>Show Routes</span>
+          <span class="toggle-check" id="routes-check">✓</span>
+        </button>
+      </div>
     </div>
     <div id="vehicle-list-header">Recent vehicles</div>
     <div id="vehicle-list"></div>
@@ -359,6 +368,15 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script>
+// ── Config ────────────────────────────────────────────────────────────────────
+const ROUTE_LINE_COLORS = {
+  bus:   '#1976D2',
+  tram:  '#388E3C',
+  train: '#F57C00',
+  metro: '#7B1FA2',
+  ferry: '#0097A7',
+};
+
 // ── State ────────────────────────────────────────────────────────────────────
 const vehicles = new Map();  // _uid -> vehicle data
 const markers  = new Map();  // _uid -> { marker, vehicle }
@@ -371,10 +389,39 @@ function fmtTime(ts) {
 let map, selectedVehicle = null;
 let searchQuery = '';
 let filterDoorsOnly = false;
+let showRoutes = true;
 let selectedTypes  = new Set();
 let selectedRoutes = new Set();
 let lastListRenderTime = 0;
 const LIST_RENDER_THROTTLE = 100;
+
+// routeKey (RouteNumber string) -> { polyline: L.polyline, type: string } | null (no shape)
+const routePolylines      = new Map();
+const routeFetchInProgress = new Set();
+
+// Rate-limited fetch queue — drip requests at 200ms intervals to avoid 429s
+const _routeQueue = [];
+let   _queueRunning = false;
+
+function enqueueRouteFetch(routeNumber, vehicleType) {
+  if (routePolylines.has(routeNumber) || routeFetchInProgress.has(routeNumber)) return;
+  if (_routeQueue.some(r => r.routeNumber === routeNumber)) return;
+  _routeQueue.push({ routeNumber, vehicleType });
+  _drainRouteQueue();
+}
+
+async function _drainRouteQueue() {
+  if (_queueRunning) return;
+  _queueRunning = true;
+  while (_routeQueue.length > 0) {
+    const { routeNumber, vehicleType } = _routeQueue.shift();
+    if (!routePolylines.has(routeNumber) && !routeFetchInProgress.has(routeNumber)) {
+      await fetchAndDrawRoute(routeNumber, vehicleType);
+    }
+    await new Promise(r => setTimeout(r, 200)); // 5 req/s max
+  }
+  _queueRunning = false;
+}
 
 function vkey(v) { return v._uid || String(v.VehicleNumber); }
 
@@ -516,6 +563,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initTypeFilter();
   initRouteFilter();
   initDoorsToggle();
+  initRoutesToggle();
 });
 
 // ── Marker helpers ────────────────────────────────────────────────────────────
@@ -647,6 +695,8 @@ function handleVehicleUpdate(v) {
     markers.set(key, { marker, vehicle: stored });
   }
 
+  enqueueRouteFetch(stored.RouteNumber, getVehicleType(stored));
+
   if (selectedVehicle && vkey(selectedVehicle) === key) {
     selectedVehicle = stored;
     renderDetailCard(stored);
@@ -679,6 +729,7 @@ function initTypeFilter() {
       c.classList.toggle('active', t === 'all' ? selectedTypes.size === 0 : selectedTypes.has(t));
     });
     renderVehicleList();
+    syncRouteVisibility();
   });
 }
 
@@ -697,6 +748,7 @@ function initRouteFilter() {
     rebuildRouteOptions(searchIn.value);
     updateRouteFilterBtn();
     renderVehicleList();
+    syncRouteVisibility();
   });
   document.getElementById('route-close-btn').addEventListener('click', () => dropdown.classList.remove('open'));
 }
@@ -734,6 +786,7 @@ function rebuildRouteOptions(query) {
       if (cb.checked) selectedRoutes.add(r); else selectedRoutes.delete(r);
       updateRouteFilterBtn();
       renderVehicleList();
+      syncRouteVisibility();
     });
     div.append(cb, pill, lbl);
     container.appendChild(div);
@@ -779,6 +832,7 @@ function syncMarkerVisibility() {
 
 function renderVehicleList() {
   syncMarkerVisibility();
+  pruneInactiveRoutes();
   const sorted = [...vehicles.values()]
     .filter(v => passesFilter(v))
     .sort((a, b) => (b.Speed || 0) - (a.Speed || 0))
@@ -846,6 +900,72 @@ function updateStats(s) {
 function filterList() {
   searchQuery = document.getElementById('search').value;
   renderVehicleList();
+}
+
+// ── Route drawing ─────────────────────────────────────────────────────────────
+async function fetchAndDrawRoute(routeNumber, vehicleType) {
+  if (!routeNumber || routePolylines.has(routeNumber) || routeFetchInProgress.has(routeNumber)) return;
+  routeFetchInProgress.add(routeNumber);
+
+  try {
+    const res = await fetch(`/api/route-shape/${encodeURIComponent(routeNumber)}`);
+    if (!res.ok) {
+      if (res.status === 404) routePolylines.set(routeNumber, null);  // permanently skip
+      return;
+    }
+    const json = await res.json();
+
+    const latlngs = json.coordinates;
+    if (!latlngs?.length) {
+      routePolylines.set(routeNumber, null);
+      return;
+    }
+
+    const color    = ROUTE_LINE_COLORS[vehicleType] ?? ROUTE_LINE_COLORS.bus;
+    const polyline = L.polyline(latlngs, { color, opacity: 0.8, weight: 3 });
+    routePolylines.set(routeNumber, { polyline, type: vehicleType });
+    applyRoutePolylineVisibility(routeNumber);
+  } catch (err) {
+    console.warn(`[routes] fetch failed for ${routeNumber}:`, err);
+  } finally {
+    routeFetchInProgress.delete(routeNumber);
+  }
+}
+
+function applyRoutePolylineVisibility(routeKey) {
+  const entry = routePolylines.get(routeKey);
+  if (!entry?.polyline) return;
+  const typeVisible  = selectedTypes.size === 0 || selectedTypes.has(entry.type);
+  const routeVisible = selectedRoutes.size === 0 || selectedRoutes.has(routeKey);
+  const visible      = showRoutes && typeVisible && routeVisible;
+  if (visible && !map.hasLayer(entry.polyline))      entry.polyline.addTo(map);
+  else if (!visible && map.hasLayer(entry.polyline)) entry.polyline.remove();
+}
+
+function syncRouteVisibility() {
+  routePolylines.forEach((_, key) => applyRoutePolylineVisibility(key));
+}
+
+function pruneInactiveRoutes() {
+  const active = new Set([...vehicles.values()].map(v => v.RouteNumber).filter(Boolean));
+  routePolylines.forEach((entry, key) => {
+    if (!active.has(key)) {
+      entry?.polyline?.remove();
+      routePolylines.delete(key);
+    }
+  });
+}
+
+function initRoutesToggle() {
+  const btn   = document.getElementById('routes-toggle');
+  const check = document.getElementById('routes-check');
+  btn.classList.add('active');
+  btn.addEventListener('click', () => {
+    showRoutes = !showRoutes;
+    btn.classList.toggle('active', showRoutes);
+    check.style.display = showRoutes ? '' : 'none';
+    syncRouteVisibility();
+  });
 }
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────

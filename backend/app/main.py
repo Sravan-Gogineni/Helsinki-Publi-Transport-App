@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api.routes import vehicles, ws
+from .api.routes import vehicles, ws, route_shapes
 from .config import settings
 from .core.lifespan import lifespan
 
@@ -30,6 +30,7 @@ def create_app() -> FastAPI:
 
     app.include_router(vehicles.router)
     app.include_router(ws.router)
+    app.include_router(route_shapes.router)
 
     @app.get("/")
     async def serve_dashboard():
