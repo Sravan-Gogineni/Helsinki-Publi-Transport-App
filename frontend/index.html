@@ -1,0 +1,892 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HFP Live Dashboard – Helsinki Transit</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f1117;
+      color: #e8eaed;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Header ── */
+    #header {
+      background: #1a1d27;
+      border-bottom: 1px solid #2d3142;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-shrink: 0;
+      z-index: 10;
+    }
+    #header h1 { font-size: 15px; font-weight: 600; color: #fff; white-space: nowrap; }
+
+    #hki-clock {
+      margin-left: auto;
+      display: flex; flex-direction: column; align-items: flex-end;
+      white-space: nowrap;
+    }
+    #hki-clock .clock-time { font-size: 16px; font-weight: 700; color: #e8eaed; letter-spacing: 0.5px; font-variant-numeric: tabular-nums; }
+    #hki-clock .clock-label { font-size: 9px; font-weight: 500; color: #5f6580; text-transform: uppercase; letter-spacing: 0.8px; }
+
+    .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+    .chip {
+      display: flex; align-items: center; gap: 5px;
+      background: #2d3142; border: 1px solid #3d4259; border-radius: 20px;
+      padding: 4px 10px; font-size: 12px; font-weight: 500; color: #c9d1e0; white-space: nowrap;
+    }
+    .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+    .dot-green  { background: #34a853; box-shadow: 0 0 4px #34a85388; }
+    .dot-blue   { background: #4285f4; box-shadow: 0 0 4px #4285f488; }
+    .dot-amber  { background: #fbbc04; box-shadow: 0 0 4px #fbbc0488; }
+
+    /* ── Main ── */
+    #main { display: flex; flex: 1; overflow: hidden; min-height: 0; }
+
+    /* ── Sidebar ── */
+    #sidebar {
+      width: 220px; min-width: 220px;
+      background: #1a1d27; border-right: 1px solid #2d3142;
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    #search-wrap { padding: 10px; border-bottom: 1px solid #2d3142; }
+    #search {
+      width: 100%; background: #0f1117; border: 1px solid #3d4259;
+      border-radius: 6px; padding: 6px 10px; color: #e8eaed; font-size: 12px; outline: none;
+    }
+    #search::placeholder { color: #5f6580; }
+    #search:focus { border-color: #4285f4; }
+
+    #vehicle-list-header {
+      padding: 6px 10px 4px; font-size: 10px; font-weight: 600; color: #5f6580;
+      text-transform: uppercase; letter-spacing: 0.8px; border-bottom: 1px solid #2d3142;
+    }
+    #vehicle-list {
+      flex: 1; overflow-y: auto;
+      scrollbar-width: thin; scrollbar-color: #3d4259 transparent;
+    }
+    #vehicle-list::-webkit-scrollbar { width: 4px; }
+    #vehicle-list::-webkit-scrollbar-track { background: transparent; }
+    #vehicle-list::-webkit-scrollbar-thumb { background: #3d4259; border-radius: 2px; }
+
+    .vehicle-row {
+      display: flex; align-items: center; gap: 8px; padding: 7px 10px;
+      cursor: pointer; border-bottom: 1px solid #1f2235; transition: background 0.15s;
+    }
+    .vehicle-row:hover  { background: #22263a; }
+    .vehicle-row.active { background: #1e3a5f; }
+    .vehicle-row.doors-open { background: #2a2418; }
+    .vehicle-row.doors-open:hover { background: #332d1e; }
+
+    .route-badge {
+      border-radius: 4px; padding: 2px 6px; font-size: 11px; font-weight: 700;
+      color: #fff; min-width: 34px; text-align: center; flex-shrink: 0;
+    }
+    .vehicle-info { flex: 1; min-width: 0; }
+    .vehicle-name { font-size: 11px; font-weight: 600; color: #c9d1e0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .vehicle-sub  { font-size: 10px; color: #5f6580; }
+    .vehicle-speed { font-size: 11px; font-weight: 600; color: #9aa0b4; white-space: nowrap; }
+
+    /* ── Legend ── */
+    #legend {
+      border-top: 1px solid #2d3142;
+      padding: 8px 10px;
+      background: #13161f;
+    }
+    .legend-title {
+      font-size: 10px; font-weight: 600; color: #5f6580;
+      text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 6px;
+    }
+    .legend-row {
+      display: flex; align-items: center; gap: 8px;
+      padding: 3px 0; font-size: 11px; color: #9aa0b4;
+    }
+    .legend-row svg { flex-shrink: 0; filter: drop-shadow(0 1px 3px rgba(0,0,0,0.5)); }
+    .legend-pulse-dot {
+      width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0;
+      border: 2px solid #fbbc04; box-shadow: 0 0 5px #fbbc0466;
+    }
+
+    /* ── Detail card ── */
+    #detail-card {
+      border-top: 1px solid #2d3142; padding: 10px; background: #13161f;
+      display: none; max-height: 220px; overflow-y: auto;
+    }
+    #detail-card.visible { display: block; }
+    #detail-title {
+      font-size: 12px; font-weight: 700; color: #fff; margin-bottom: 8px;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .detail-table { width: 100%; font-size: 11px; border-collapse: collapse; }
+    .detail-table td { padding: 2px 0; vertical-align: top; }
+    .detail-table td:first-child { color: #5f6580; }
+    .detail-table td:last-child  { color: #c9d1e0; text-align: right; font-weight: 500; }
+
+    /* ── Map ── */
+    #map { flex: 1; min-height: 0; }
+
+    /* ── Status bar ── */
+    #statusbar {
+      background: #13161f; border-top: 1px solid #2d3142;
+      padding: 5px 14px; font-size: 11px; color: #8a91a8;
+      display: flex; align-items: center; gap: 6px; flex-shrink: 0;
+    }
+    #statusbar .status-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+    #statusbar.connected    .status-dot { background: #34a853; }
+    #statusbar.disconnected .status-dot { background: #ea4335; }
+    #statusbar.reconnecting .status-dot { background: #fbbc04; }
+    #statusbar .status-text { color: #9aa0b4; }
+
+    /* ── Filter controls ── */
+    .type-filter-row { display: flex; flex-wrap: wrap; gap: 4px; }
+    .type-chip {
+      padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: 600;
+      border: 1px solid #3d4259; background: #0f1117; color: #9aa0b4;
+      cursor: pointer; transition: all 0.15s; white-space: nowrap;
+      display: flex; align-items: center; gap: 4px;
+    }
+    .type-chip:hover { border-color: #5f6580; color: #c9d1e0; }
+    .type-chip.active { background: var(--chip-color); border-color: var(--chip-color); color: #fff; }
+    .chip-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--chip-color); flex-shrink: 0; }
+    .type-chip.active .chip-dot { background: rgba(255,255,255,0.8); }
+
+    .route-filter-wrap { position: relative; }
+    #route-filter-btn {
+      width: 100%; text-align: left; padding: 6px 10px; font-size: 11px;
+      background: #0f1117; border: 1px solid #3d4259; border-radius: 6px;
+      color: #9aa0b4; cursor: pointer; display: flex; align-items: center; gap: 6px;
+      transition: border-color 0.15s;
+    }
+    #route-filter-btn:hover { border-color: #5f6580; color: #c9d1e0; }
+    #route-filter-btn.has-selection { border-color: #4285f4; color: #c9d1e0; }
+    #route-filter-btn .btn-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #route-filter-btn .chevron { font-size: 9px; color: #5f6580; flex-shrink: 0; }
+    #route-dropdown {
+      position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+      background: #1a1d27; border: 1px solid #3d4259; border-radius: 6px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.6); z-index: 100;
+      display: none; flex-direction: column; max-height: 200px;
+    }
+    #route-dropdown.open { display: flex; }
+    #route-search-input {
+      padding: 6px 8px; background: #0f1117; border: none;
+      border-bottom: 1px solid #2d3142; color: #e8eaed; font-size: 12px;
+      outline: none; border-radius: 6px 6px 0 0; flex-shrink: 0;
+    }
+    #route-options {
+      flex: 1; overflow-y: auto;
+      scrollbar-width: thin; scrollbar-color: #3d4259 transparent;
+    }
+    #route-options::-webkit-scrollbar { width: 4px; }
+    #route-options::-webkit-scrollbar-thumb { background: #3d4259; border-radius: 2px; }
+    .route-option {
+      display: flex; align-items: center; gap: 7px; padding: 5px 10px;
+      cursor: pointer; font-size: 12px; color: #c9d1e0; transition: background 0.1s;
+    }
+    .route-option:hover { background: #22263a; }
+    .route-option input[type="checkbox"] { accent-color: #4285f4; flex-shrink: 0; cursor: pointer; }
+    .route-option label { flex: 1; cursor: pointer; }
+    .route-pill {
+      border-radius: 3px; padding: 1px 5px; font-size: 10px; font-weight: 700;
+      color: #fff; flex-shrink: 0; min-width: 24px; text-align: center;
+    }
+    #route-dropdown-footer {
+      padding: 5px 10px; border-top: 1px solid #2d3142;
+      display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;
+    }
+    #route-clear-btn, #route-close-btn {
+      font-size: 11px; color: #5f6580; background: none; border: none;
+      cursor: pointer; padding: 2px 6px; border-radius: 3px; transition: color 0.15s;
+    }
+    #route-clear-btn:hover, #route-close-btn:hover { color: #c9d1e0; }
+
+    #doors-toggle {
+      width: 100%; padding: 5px 10px; border-radius: 6px; font-size: 12px; font-weight: 500;
+      border: 1px solid #3d4259; background: #0f1117; color: #9aa0b4;
+      cursor: pointer; display: flex; align-items: center; gap: 7px;
+      transition: all 0.15s;
+    }
+    #doors-toggle:hover { border-color: #5f6580; color: #c9d1e0; }
+    #doors-toggle.active { border-color: #fbbc04; color: #fbbc04; background: rgba(251,188,4,0.08); }
+    #doors-toggle .toggle-check { margin-left: auto; font-size: 11px; }
+
+    /* ── Leaflet overrides ── */
+    .leaflet-tile-pane { filter: brightness(0.95); }
+    .leaflet-control-attribution {
+      background: rgba(15,17,23,0.8) !important; color: #8a91a8 !important; font-size: 9px !important;
+    }
+    .leaflet-control-attribution a { color: #9aa0b4 !important; }
+    .leaflet-control-zoom a {
+      background: #1a1d27 !important; color: #e8eaed !important;
+      border-color: #3d4259 !important;
+    }
+    .leaflet-control-zoom a:hover { background: #2d3142 !important; }
+
+    /* ── Popup dark theme ── */
+    .leaflet-popup-content-wrapper {
+      background: #1a1d27 !important; color: #e8eaed !important;
+      border: 1px solid #2d3142 !important; border-radius: 6px !important;
+      box-shadow: 0 4px 16px rgba(0,0,0,.6) !important;
+    }
+    .leaflet-popup-tip { background: #1a1d27 !important; }
+    .leaflet-popup-close-button { color: #9aa0b4 !important; top: 6px !important; right: 8px !important; }
+
+    /* ── Vehicle markers ── */
+    .hfp-leaflet-icon { background: none !important; border: none !important; }
+
+    .hfp-marker-content {
+      display: flex; flex-direction: column; align-items: center;
+      transform: translate(-50%, -50%);
+      cursor: pointer;
+    }
+    .hfp-icon-wrap {
+      display: flex; align-items: center; justify-content: center;
+      filter: drop-shadow(0 2px 6px rgba(0,0,0,0.7));
+      transition: transform 0.4s ease-out;
+    }
+    .hfp-label {
+      margin-top: 2px; border-radius: 8px; padding: 1px 6px;
+      font-size: 9px; font-weight: 800; color: #fff; white-space: nowrap;
+      letter-spacing: 0.3px; box-shadow: 0 1px 4px rgba(0,0,0,.6); position: relative;
+    }
+
+    @keyframes pulse-ring {
+      0%   { transform: translate(-50%,-50%) scale(1);   opacity: 0.9; }
+      100% { transform: translate(-50%,-50%) scale(2.2); opacity: 0; }
+    }
+    .hfp-pulse {
+      position: absolute; top: 50%; left: 50%;
+      width: 100%; height: 100%; border-radius: 8px;
+      border: 2px solid #fbbc04;
+      animation: pulse-ring 1.2s ease-out infinite;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+
+<div id="header">
+  <h1>HFP Live Dashboard – Helsinki Transit</h1>
+  <div class="chips">
+    <div class="chip"><span class="dot dot-green"></span><span id="chip-vehicles">0 vehicles</span></div>
+    <div class="chip"><span class="dot dot-blue"></span><span id="chip-speed">0 km/h avg</span></div>
+    <div class="chip"><span class="dot dot-amber"></span><span id="chip-mps">0 msg/s</span></div>
+  </div>
+  <div id="hki-clock">
+    <span class="clock-time" id="hki-clock-time">––:––:––</span>
+    <span class="clock-label">Helsinki</span>
+  </div>
+</div>
+
+<div id="main">
+  <div id="sidebar">
+    <div id="search-wrap">
+      <input id="search" type="text" placeholder="Search route or vehicle…" oninput="filterList()" />
+      <div style="margin-top:8px">
+        <div class="type-filter-row" id="type-filter-row">
+          <button class="type-chip active" data-type="all" style="--chip-color:#4285f4">All</button>
+          <button class="type-chip" data-type="bus"   style="--chip-color:#007ac9"><span class="chip-dot"></span>Bus</button>
+          <button class="type-chip" data-type="tram"  style="--chip-color:#00985f"><span class="chip-dot"></span>Tram</button>
+          <button class="type-chip" data-type="train" style="--chip-color:#ff6319"><span class="chip-dot"></span>Train</button>
+          <button class="type-chip" data-type="metro" style="--chip-color:#e8192c"><span class="chip-dot"></span>Metro</button>
+          <button class="type-chip" data-type="ferry" style="--chip-color:#00b9e4"><span class="chip-dot"></span>Ferry</button>
+        </div>
+      </div>
+      <div style="margin-top:8px" class="route-filter-wrap">
+        <button id="route-filter-btn">
+          <span class="btn-label">All routes</span>
+          <span class="chevron">▼</span>
+        </button>
+        <div id="route-dropdown">
+          <input id="route-search-input" type="text" placeholder="Search routes…" autocomplete="off" />
+          <div id="route-options"></div>
+          <div id="route-dropdown-footer">
+            <button id="route-clear-btn">Clear all</button>
+            <button id="route-close-btn">Done</button>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:8px">
+        <button id="doors-toggle">
+          <span>🚪</span>
+          <span>Doors open only</span>
+          <span class="toggle-check" id="doors-check" style="display:none">✓</span>
+        </button>
+      </div>
+    </div>
+    <div id="vehicle-list-header">Recent vehicles</div>
+    <div id="vehicle-list"></div>
+    <div id="legend">
+      <div class="legend-title">Vehicle types</div>
+      <div class="legend-row"><div style="width:18px;height:18px;background:#00985f;border-radius:3px;display:flex;align-items:center;justify-content:center;flex-shrink:0"><img src="/static/tram-way.svg" width="13" height="13" alt="Tram" style="filter:invert(1)"/></div><span>Tram</span></div>
+      <div class="legend-row"><svg width="14" height="15" viewBox="0 0 26 28"><rect x="3" y="18.5" width="7" height="7.5" rx="3.5" fill="#007ac9"/><rect x="16" y="18.5" width="7" height="7.5" rx="3.5" fill="#007ac9"/><rect x="3" y="1.5" width="20" height="18" rx="2.5" fill="#007ac9"/><rect x="0.5" y="4" width="2.8" height="4.5" rx="1.2" fill="#007ac9"/><rect x="22.7" y="4" width="2.8" height="4.5" rx="1.2" fill="#007ac9"/><rect x="6.5" y="2.8" width="13" height="2.5" rx="0.8" fill="rgba(255,255,255,0.9)"/><rect x="4.5" y="6.5" width="17" height="9.5" rx="1.5" fill="rgba(255,255,255,0.9)"/><circle cx="6.5" cy="22.5" r="2.8" fill="rgba(255,255,255,0.9)"/><circle cx="19.5" cy="22.5" r="2.8" fill="rgba(255,255,255,0.9)"/></svg><span>Bus</span></div>
+      <div class="legend-row"><svg width="14" height="16" viewBox="0 0 18 28"><path d="M2,5 Q2,1 9,1 Q16,1 16,5 L16,24 Q16,27 9,27 Q2,27 2,24 Z" fill="#e8192c"/><rect x="3" y="3.5" width="12" height="4" rx="1.5" fill="rgba(255,255,255,0.65)"/></svg><span>Metro</span></div>
+      <div class="legend-row"><div style="width:18px;height:18px;background:#ff6319;border-radius:3px;display:flex;align-items:center;justify-content:center;flex-shrink:0"><img src="/static/train.png" width="13" height="13" alt="Train" style="filter:invert(1)"/></div><span>Train</span></div>
+      <div class="legend-row"><svg width="16" height="14" viewBox="0 0 24 22"><path d="M12,1 L22,8 L22,18 Q22,21 12,21 Q2,21 2,18 L2,8 Z" fill="#00b9e4"/></svg><span>Ferry</span></div>
+      <div class="legend-row"><span class="legend-pulse-dot"></span><span>Doors open</span></div>
+    </div>
+    <div id="detail-card">
+      <div id="detail-title">
+        <span id="detail-badge" class="route-badge">–</span>
+        <span id="detail-heading">–</span>
+      </div>
+      <table class="detail-table" id="detail-table"></table>
+    </div>
+  </div>
+
+  <div id="map"></div>
+</div>
+
+<div id="statusbar" class="disconnected">
+  <span class="status-dot"></span>
+  <span class="status-text" id="status-text">Connecting…</span>
+  <span>·</span><span>Pub/Sub · vh-details</span>
+  <span>·</span><span id="status-mps">0 msg/s</span>
+  <span>·</span><span id="status-time">–</span>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+// ── State ────────────────────────────────────────────────────────────────────
+const vehicles = new Map();  // _uid -> vehicle data
+const markers  = new Map();  // _uid -> { marker, vehicle }
+
+const HKI_TZ = 'Europe/Helsinki';
+function fmtTime(ts) {
+  if (!ts) return '–';
+  return new Date(ts).toLocaleTimeString('en-GB', { timeZone: HKI_TZ, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+let map, selectedVehicle = null;
+let searchQuery = '';
+let filterDoorsOnly = false;
+let selectedTypes  = new Set();
+let selectedRoutes = new Set();
+let lastListRenderTime = 0;
+const LIST_RENDER_THROTTLE = 100;
+
+function vkey(v) { return v._uid || String(v.VehicleNumber); }
+
+const TRAM_ROUTES  = new Set(['1','2','3','4','5','6','7','8','9','10']);
+const METRO_ROUTES = new Set(['M1','M2']);
+const FERRY_ROUTES = new Set(['19']);
+
+// Normalize route to display form: "0001"→"1", "1001"→"1", "M1"→"M1"
+function normalizeRoute(r) {
+  if (!r) return '';
+  r = String(r).trim();
+  // JORE 4-digit numeric IDs: "1001"–"1099" → tram "1"–"99", etc.
+  // Strip leading zeros from pure-numeric routes: "0001"→"1", "0506"→"506"
+  const num = r.match(/^(\d+)([A-Z]?)$/i);
+  if (num) {
+    const n = Number.parseInt(num[1], 10);
+    const suffix = num[2] ? num[2].toUpperCase() : '';
+    // JORE format: 4-digit numbers like 1001 encode line 1 (last 2-3 digits)
+    if (num[1].length === 4 && n >= 1000 && n <= 1099) return String(n - 1000) + suffix;
+    return String(n) + suffix;
+  }
+  // Metro JORE: "31M1"→"M1"
+  const metro = r.match(/^\d*(M\d+)$/i);
+  if (metro) return metro[1].toUpperCase();
+  return r.toUpperCase();
+}
+
+const TYPE_COLORS = { tram: '#00985f', metro: '#e8192c', ferry: '#00b9e4', train: '#ff6319', bus: '#007ac9' };
+
+function getVehicleType(v) {
+  if (v && typeof v === 'object') {
+    // Prefer explicit VehicleType field
+    if (v.VehicleType) {
+      const t = v.VehicleType.toLowerCase();
+      if (t === 'tram')                    return 'tram';
+      if (t === 'metro' || t === 'subway') return 'metro';
+      if (t === 'ferry' || t === 'boat')   return 'ferry';
+      if (t === 'train')                   return 'train';
+      if (t === 'bus' || t === 'ubus')     return 'bus';
+    }
+    // Fall back to TransportMode
+    if (v.TransportMode) {
+      const m = v.TransportMode.toLowerCase();
+      if (m === 'tram')                    return 'tram';
+      if (m === 'metro')                   return 'metro';
+      if (m === 'ferry' || m === 'boat')   return 'ferry';
+      if (m === 'train')                   return 'train';
+      return 'bus';
+    }
+  }
+  // Last resort: infer from route number
+  const r = normalizeRoute(typeof v === 'object' ? v?.RouteNumber : v);
+  if (!r) return 'bus';
+  if (METRO_ROUTES.has(r)) return 'metro';
+  if (TRAM_ROUTES.has(r))  return 'tram';
+  if (FERRY_ROUTES.has(r)) return 'ferry';
+  return 'bus';
+}
+
+function getRouteColor(v) {
+  return TYPE_COLORS[getVehicleType(v)] ?? '#007ac9';
+}
+
+// ── SVG icons ────────────────────────────────────────────────────────────────
+function getVehicleIcon(type, color) {
+  const dark = 'rgba(0,0,0,0.35)';
+  const win1 = 'rgba(255,255,255,0.65)';
+  const win2 = 'rgba(255,255,255,0.45)';
+  switch (type) {
+    case 'tram': return `
+      <div style="width:28px;height:28px;background:${color};border-radius:4px;display:flex;align-items:center;justify-content:center">
+        <img src="/static/tram-way.svg" width="22" height="22" alt="Tram" style="filter:invert(1)"/>
+      </div>`;
+    case 'metro': return `
+      <svg width="18" height="28" viewBox="0 0 18 28" xmlns="http://www.w3.org/2000/svg">
+        <path d="M2,5 Q2,1 9,1 Q16,1 16,5 L16,24 Q16,27 9,27 Q2,27 2,24 Z" fill="${color}"/>
+        <ellipse cx="9" cy="3" rx="5" ry="2" fill="rgba(255,255,255,0.22)"/>
+        <rect x="3" y="3.5" width="12" height="4" rx="1.5" fill="${win1}"/>
+        <rect x="3"  y="9"  width="5" height="4" rx="1" fill="${win1}"/>
+        <rect x="10" y="9"  width="5" height="4" rx="1" fill="${win1}"/>
+        <rect x="3" y="14" width="12" height="1.5" fill="rgba(0,0,0,0.28)"/>
+        <rect x="3"  y="16.5" width="5" height="4" rx="1" fill="${win2}"/>
+        <rect x="10" y="16.5" width="5" height="4" rx="1" fill="${win2}"/>
+        <rect x="3"  y="23"  width="5" height="3" rx="1" fill="${dark}"/>
+        <rect x="10" y="23"  width="5" height="3" rx="1" fill="${dark}"/>
+        <rect x="0"   y="6"  width="2" height="4" rx="1" fill="${dark}"/>
+        <rect x="16"  y="6"  width="2" height="4" rx="1" fill="${dark}"/>
+        <rect x="0"   y="19" width="2" height="4" rx="1" fill="${dark}"/>
+        <rect x="16"  y="19" width="2" height="4" rx="1" fill="${dark}"/>
+      </svg>`;
+    case 'ferry': return `
+      <svg width="24" height="22" viewBox="0 0 24 22" xmlns="http://www.w3.org/2000/svg">
+        <path d="M12,1 L22,8 L22,18 Q22,21 12,21 Q2,21 2,18 L2,8 Z" fill="${color}"/>
+        <path d="M12,1 L22,8 L12,6 L2,8 Z" fill="rgba(255,255,255,0.18)"/>
+        <rect x="6" y="8" width="12" height="8" rx="2" fill="${color}" opacity="0.85"/>
+        <rect x="7"  y="9"  width="4" height="3" rx="0.8" fill="${win1}"/>
+        <rect x="13" y="9"  width="4" height="3" rx="0.8" fill="${win1}"/>
+        <circle cx="4"  cy="15" r="1.5" fill="${win2}"/>
+        <circle cx="4"  cy="19" r="1.5" fill="${win2}"/>
+        <circle cx="20" cy="15" r="1.5" fill="${win2}"/>
+        <circle cx="20" cy="19" r="1.5" fill="${win2}"/>
+        <rect x="10.5" y="7" width="3" height="2" rx="1" fill="rgba(0,0,0,0.4)"/>
+      </svg>`;
+    case 'train': return `
+      <div style="width:28px;height:28px;background:${color};border-radius:4px;display:flex;align-items:center;justify-content:center">
+        <img src="/static/train.png" width="22" height="22" alt="Train" style="filter:invert(1)"/>
+      </div>`;
+    default: return `
+      <svg width="22" height="24" viewBox="0 0 26 28" xmlns="http://www.w3.org/2000/svg">
+        <rect x="3"    y="18.5" width="7"    height="7.5"  rx="3.5" fill="${color}"/>
+        <rect x="16"   y="18.5" width="7"    height="7.5"  rx="3.5" fill="${color}"/>
+        <rect x="3"    y="1.5"  width="20"   height="18"   rx="2.5" fill="${color}"/>
+        <rect x="0.5"  y="4"    width="2.8"  height="4.5"  rx="1.2" fill="${color}"/>
+        <rect x="22.7" y="4"    width="2.8"  height="4.5"  rx="1.2" fill="${color}"/>
+        <rect x="6.5"  y="2.8"  width="13"   height="2.5"  rx="0.8" fill="rgba(255,255,255,0.9)"/>
+        <rect x="4.5"  y="6.5"  width="17"   height="9.5"  rx="1.5" fill="rgba(255,255,255,0.9)"/>
+        <circle cx="6.5"  cy="22.5" r="2.8" fill="rgba(255,255,255,0.9)"/>
+        <circle cx="19.5" cy="22.5" r="2.8" fill="rgba(255,255,255,0.9)"/>
+      </svg>`;
+  }
+}
+
+// ── Leaflet map ───────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  map = L.map('map', { zoomControl: true, attributionControl: true })
+         .setView([60.1699, 24.9384], 12);
+  // Force Leaflet to recalculate size after flex layout settles
+  setTimeout(() => map.invalidateSize(), 100);
+
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions">CARTO</a>',
+    maxZoom: 19,
+  }).addTo(map);
+
+  // Close popup when clicking the map background
+  map.on('click', () => map.closePopup());
+
+  connectWebSocket();
+  initTypeFilter();
+  initRouteFilter();
+  initDoorsToggle();
+});
+
+// ── Marker helpers ────────────────────────────────────────────────────────────
+function applyHeading(wrap, v) {
+  if ((v.Speed || 0) < 3) return;
+  const target  = v.Heading || 0;
+  // `current` is the *accumulated* value (may exceed 360) so that CSS
+  // transition always animates in the geometrically correct direction.
+  // Wrapping to 0-360 causes the transition to go the long way round.
+  const current    = Number.parseFloat(wrap.dataset.heading ?? target);
+  const currentMod = ((current % 360) + 360) % 360;
+  let delta = target - currentMod;
+  if (delta >  180) delta -= 360;
+  if (delta < -180) delta += 360;
+  // Only rotate on genuine turns (≥ 90°) — straight roads and gentle
+  // curves are ignored entirely
+  if (Math.abs(delta) < 90) return;
+  const next = current + delta;          // accumulate — never wrap
+  wrap.style.transform = `rotate(${next}deg)`;
+  wrap.dataset.heading = String(next);
+}
+
+function makeIcon(v) {
+  const color   = getRouteColor(v);
+  const type    = getVehicleType(v);
+  const heading = (v.Speed || 0) >= 3 ? (v.Heading || 0) : 0;
+  return L.divIcon({
+    html: `<div class="hfp-marker-content">
+             <div class="hfp-icon-wrap" data-color="${color}" data-heading="${heading}"
+                  style="transform:rotate(${heading}deg)">${getVehicleIcon(type, color)}</div>
+             <div class="hfp-label" style="background:${color}">${v.RouteNumber||'?'}${v.DoorStatus?'<span class="hfp-pulse"></span>':''}</div>
+           </div>`,
+    className: 'hfp-leaflet-icon',
+    iconSize:   [0, 0],
+    iconAnchor: [0, 0],
+  });
+}
+
+function updateMarkerDOM(el, v) {
+  const color = getRouteColor(v);
+  const type  = getVehicleType(v);
+  const wrap  = el.querySelector('.hfp-icon-wrap');
+  const label = el.querySelector('.hfp-label');
+  if (wrap) {
+    if (wrap.dataset.color !== color) {
+      wrap.innerHTML     = getVehicleIcon(type, color);
+      wrap.dataset.color = color;
+    }
+    applyHeading(wrap, v);
+  }
+  if (label) {
+    label.style.background = color;
+    label.innerHTML = `${v.RouteNumber||'?'}${v.DoorStatus?'<span class="hfp-pulse"></span>':''}`;
+  }
+}
+
+function showPopup(v, marker) {
+  const color = getRouteColor(v);
+  marker.bindPopup(`
+    <div style="min-width:180px">
+      <div style="margin:0 0 8px;font-size:14px;display:flex;align-items:center;gap:6px">
+        <span style="background:${color};color:#fff;border-radius:4px;padding:1px 7px;font-size:12px">${v.RouteNumber||'?'}</span>
+        <strong>Helsinki Transit</strong>
+      </div>
+      <table style="font-size:12px;width:100%;border-collapse:collapse">
+        <tr><td style="color:#9aa0b4;padding:2px 0">Vehicle</td><td style="text-align:right;font-weight:600">#${v.VehicleNumber}</td></tr>
+        <tr><td style="color:#9aa0b4;padding:2px 0">Speed</td><td style="text-align:right;font-weight:600">${Math.round(v.Speed)} km/h</td></tr>
+        <tr><td style="color:#9aa0b4;padding:2px 0">Heading</td><td style="text-align:right;font-weight:600">${Math.round(v.Heading)}°</td></tr>
+        <tr><td style="color:#9aa0b4;padding:2px 0">Doors</td><td style="text-align:right;font-weight:600">${v.DoorStatus ? '🟡 Open' : '✅ Closed'}</td></tr>
+        <tr><td style="color:#9aa0b4;padding:2px 0">Occupancy</td><td style="text-align:right;font-weight:600">${v.OccupancyLevel}%</td></tr>
+        <tr><td style="color:#9aa0b4;padding:2px 0">Schedule</td><td style="text-align:right;font-weight:600">${v.ScheduleOffset >= 0 ? '+' : ''}${v.ScheduleOffset}s</td></tr>
+        <tr><td style="color:#9aa0b4;padding:2px 0">Source</td><td style="text-align:right;font-weight:600">${v.LocationSource||'GPS'}</td></tr>
+      </table>
+    </div>`, { maxWidth: 260 }
+  ).openPopup();
+}
+
+// ── Location plausibility ─────────────────────────────────────────────────────
+function metersBetween(a, b) {
+  const R = 6371000, toRad = x => x * Math.PI / 180;
+  const dLat = toRad(b.lat - a.lat), dLng = toRad(b.lng - a.lng);
+  const s = Math.sin(dLat/2)**2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1-s));
+}
+
+function isPlausibleLocationUpdate(prev, next) {
+  if (next.Latitude == null || next.Longitude == null) return false;
+  const lat = Number.parseFloat(next.Latitude), lng = Number.parseFloat(next.Longitude);
+  if (lat < 59.8 || lat > 60.5 || lng < 24.5 || lng > 25.3) return false;
+  if (!prev || !prev.Timestamp || !next.Timestamp || prev.Latitude == null) return true;
+  const dt = (Date.parse(next.Timestamp) - Date.parse(prev.Timestamp)) / 1000;
+  if (dt < -2) return false;
+  if (dt <= 0)  return true;
+  const dist = metersBetween({ lat: prev.Latitude, lng: prev.Longitude }, { lat, lng });
+  return (dist / dt) <= 40;
+}
+
+// ── Vehicle update handler ────────────────────────────────────────────────────
+function handleVehicleUpdate(v) {
+  const key  = vkey(v);
+  const prev = vehicles.get(key);
+  const isPlausible = isPlausibleLocationUpdate(prev, v);
+  const stored = (isPlausible || !prev)
+    ? v
+    : {
+        ...v,
+        Latitude:    prev.Latitude,
+        Longitude:   prev.Longitude,
+        Timestamp:   prev.Timestamp,
+        RouteNumber: prev.RouteNumber ?? v.RouteNumber,
+        LineID:      prev.LineID      ?? v.LineID,
+      };
+
+  if (markers.has(key)) {
+    const entry = markers.get(key);
+    vehicles.set(key, stored);
+    entry.vehicle = stored;
+    entry.marker.setLatLng([stored.Latitude, stored.Longitude]);
+    const el = entry.marker.getElement();
+    if (el) updateMarkerDOM(el, stored);
+  } else {
+    vehicles.set(key, stored);
+    const marker = L.marker([stored.Latitude, stored.Longitude], { icon: makeIcon(stored), keyboard: false });
+    marker.addTo(map);
+    marker.on('click', () => {
+      const live = markers.get(key)?.vehicle || stored;
+      selectVehicle(live); showPopup(live, marker);
+    });
+    markers.set(key, { marker, vehicle: stored });
+  }
+
+  if (selectedVehicle && vkey(selectedVehicle) === key) {
+    selectedVehicle = stored;
+    renderDetailCard(stored);
+  }
+
+  const now = performance.now();
+  if (now - lastListRenderTime > LIST_RENDER_THROTTLE) {
+    renderVehicleList();
+    updateRouteFilterOptions();
+    lastListRenderTime = now;
+  }
+}
+
+// ── Sidebar ───────────────────────────────────────────────────────────────────
+function initTypeFilter() {
+  const row = document.getElementById('type-filter-row');
+  row.addEventListener('click', e => {
+    const btn = e.target.closest('.type-chip');
+    if (!btn) return;
+    const type = btn.dataset.type;
+    if (type === 'all') {
+      selectedTypes.clear();
+    } else if (selectedTypes.has(type)) {
+      selectedTypes.delete(type);
+    } else {
+      selectedTypes.add(type);
+    }
+    row.querySelectorAll('.type-chip').forEach(c => {
+      const t = c.dataset.type;
+      c.classList.toggle('active', t === 'all' ? selectedTypes.size === 0 : selectedTypes.has(t));
+    });
+    renderVehicleList();
+  });
+}
+
+function initRouteFilter() {
+  const btn      = document.getElementById('route-filter-btn');
+  const dropdown = document.getElementById('route-dropdown');
+  const searchIn = document.getElementById('route-search-input');
+
+  btn.addEventListener('click', e => { e.stopPropagation(); dropdown.classList.toggle('open'); });
+  document.addEventListener('click', e => {
+    if (!dropdown.contains(e.target) && e.target !== btn) dropdown.classList.remove('open');
+  });
+  searchIn.addEventListener('input', () => rebuildRouteOptions(searchIn.value));
+  document.getElementById('route-clear-btn').addEventListener('click', () => {
+    selectedRoutes.clear();
+    rebuildRouteOptions(searchIn.value);
+    updateRouteFilterBtn();
+    renderVehicleList();
+  });
+  document.getElementById('route-close-btn').addEventListener('click', () => dropdown.classList.remove('open'));
+}
+
+function initDoorsToggle() {
+  const btn   = document.getElementById('doors-toggle');
+  const check = document.getElementById('doors-check');
+  btn.addEventListener('click', () => {
+    filterDoorsOnly = !filterDoorsOnly;
+    btn.classList.toggle('active', filterDoorsOnly);
+    check.style.display = filterDoorsOnly ? '' : 'none';
+    renderVehicleList();
+  });
+}
+
+function rebuildRouteOptions(query) {
+  query = (query || '').toLowerCase();
+  const allRoutes = [...new Set([...vehicles.values()].map(v => v.RouteNumber).filter(Boolean))]
+    .sort((a, b) => { const na = Number.parseInt(a), nb = Number.parseInt(b); return (!Number.isNaN(na) && !Number.isNaN(nb)) ? na - nb : a.localeCompare(b); });
+  const filtered = query ? allRoutes.filter(r => r.toLowerCase().includes(query)) : allRoutes;
+  const container = document.getElementById('route-options');
+  container.innerHTML = '';
+  filtered.forEach(r => {
+    const v = [...vehicles.values()].find(x => x.RouteNumber === r);
+    const color = v ? getRouteColor(v) : '#007ac9';
+    const div = document.createElement('div');
+    div.className = 'route-option';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.id = `ropt-${r}`; cb.checked = selectedRoutes.has(r);
+    const pill = document.createElement('span');
+    pill.className = 'route-pill'; pill.style.background = color; pill.textContent = r;
+    const lbl = document.createElement('label');
+    lbl.htmlFor = `ropt-${r}`; lbl.textContent = r;
+    cb.addEventListener('change', () => {
+      if (cb.checked) selectedRoutes.add(r); else selectedRoutes.delete(r);
+      updateRouteFilterBtn();
+      renderVehicleList();
+    });
+    div.append(cb, pill, lbl);
+    container.appendChild(div);
+  });
+}
+
+function updateRouteFilterBtn() {
+  const btn   = document.getElementById('route-filter-btn');
+  const label = btn.querySelector('.btn-label');
+  if (selectedRoutes.size === 0) {
+    label.textContent = 'All routes';
+    btn.classList.remove('has-selection');
+  } else {
+    const list = [...selectedRoutes].slice(0, 3).join(', ');
+    label.textContent = list + (selectedRoutes.size > 3 ? ` +${selectedRoutes.size - 3}` : '');
+    btn.classList.add('has-selection');
+  }
+}
+
+function updateRouteFilterOptions() {
+  rebuildRouteOptions(document.getElementById('route-search-input')?.value || '');
+  updateRouteFilterBtn();
+}
+
+function passesFilter(v) {
+  if (filterDoorsOnly && !v.DoorStatus) return false;
+  if (selectedTypes.size > 0 && !selectedTypes.has(getVehicleType(v))) return false;
+  if (selectedRoutes.size > 0 && !selectedRoutes.has(v.RouteNumber)) return false;
+  if (searchQuery) {
+    const q = searchQuery.toLowerCase();
+    return String(v.VehicleNumber).includes(q) || (v.RouteNumber && v.RouteNumber.toLowerCase().includes(q));
+  }
+  return true;
+}
+
+function syncMarkerVisibility() {
+  markers.forEach(({ marker, vehicle }) => {
+    const visible = passesFilter(vehicle);
+    if (visible && !map.hasLayer(marker)) marker.addTo(map);
+    else if (!visible && map.hasLayer(marker)) marker.remove();
+  });
+}
+
+function renderVehicleList() {
+  syncMarkerVisibility();
+  const sorted = [...vehicles.values()]
+    .filter(v => passesFilter(v))
+    .sort((a, b) => (b.Speed || 0) - (a.Speed || 0))
+    .slice(0, 40);
+
+  const list = document.getElementById('vehicle-list');
+  list.innerHTML = '';
+  sorted.forEach(v => {
+    const color = getRouteColor(v);
+    const row   = document.createElement('div');
+    row.className = 'vehicle-row' +
+      (v.DoorStatus ? ' doors-open' : '') +
+      (selectedVehicle && vkey(selectedVehicle) === vkey(v) ? ' active' : '');
+    row.innerHTML = `
+      <span class="route-badge" style="background:${color}">${v.RouteNumber||'?'}</span>
+      <div class="vehicle-info">
+        <div class="vehicle-name">#${v.VehicleNumber}</div>
+        <div class="vehicle-sub">${v.DoorStatus ? '🟡 Doors open' : (v.LocationSource||'GPS')}</div>
+      </div>
+      <span class="vehicle-speed">${Math.round(v.Speed)}<br><span style="font-size:9px;font-weight:400;color:#5f6580">km/h</span></span>`;
+    row.addEventListener('click', () => {
+      selectVehicle(v);
+      map.panTo([v.Latitude, v.Longitude]);
+      const entry = markers.get(vkey(v));
+      if (entry) showPopup(v, entry.marker);
+    });
+    list.appendChild(row);
+  });
+}
+
+function selectVehicle(v) {
+  selectedVehicle = v;
+  renderDetailCard(v);
+  renderVehicleList();
+}
+
+function renderDetailCard(v) {
+  const card  = document.getElementById('detail-card');
+  const badge = document.getElementById('detail-badge');
+  const head  = document.getElementById('detail-heading');
+  const tbl   = document.getElementById('detail-table');
+  const color = getRouteColor(v);
+  badge.textContent = v.RouteNumber; badge.style.background = color;
+  head.textContent  = `Vehicle #${v.VehicleNumber}`;
+  card.classList.add('visible');
+  tbl.innerHTML = [
+    ['Speed',     `${Math.round(v.Speed)} km/h`],
+    ['Heading',   `${Math.round(v.Heading)}°`],
+    ['Doors',     v.DoorStatus ? '🟡 Open' : 'Closed'],
+    ['Occupancy', `${v.OccupancyLevel}%`],
+    ['Schedule',  `${v.ScheduleOffset >= 0 ? '+' : ''}${v.ScheduleOffset}s`],
+    ['Accel.',    `${v.Acceleration.toFixed(2)} m/s²`],
+    ['Source',    v.LocationSource || 'GPS'],
+    ['Updated',   fmtTime(v.Timestamp)],
+  ].map(([k, val]) => `<tr><td>${k}</td><td>${val}</td></tr>`).join('');
+}
+
+function updateStats(s) {
+  document.getElementById('chip-vehicles').textContent = `${s.active_vehicles} vehicles`;
+  document.getElementById('chip-speed').textContent    = `${s.avg_speed} km/h avg`;
+  document.getElementById('chip-mps').textContent      = `${s.messages_per_second} msg/s`;
+  document.getElementById('status-mps').textContent    = `${s.messages_per_second} msg/s`;
+}
+
+function filterList() {
+  searchQuery = document.getElementById('search').value;
+  renderVehicleList();
+}
+
+// ── WebSocket ─────────────────────────────────────────────────────────────────
+function updateStatus(state) {
+  const bar = document.getElementById('statusbar');
+  const txt = document.getElementById('status-text');
+  bar.className = state;
+  txt.textContent = { connected: 'Connected', disconnected: 'Disconnected', reconnecting: 'Reconnecting…', error: 'Error' }[state] || state;
+  document.getElementById('status-time').textContent = new Date().toLocaleTimeString();
+}
+
+function connectWebSocket() {
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${protocol}//${location.host}/ws`);
+
+  ws.onopen = () => {
+    updateStatus('connected');
+    fetch('/api/vehicles')
+      .then(r => r.json())
+      .then(d => d.vehicles.forEach(handleVehicleUpdate))
+      .catch(e => console.warn('REST vehicle fetch failed:', e));
+  };
+  ws.onclose = () => { updateStatus('disconnected'); setTimeout(connectWebSocket, 3000); };
+  ws.onerror = () => updateStatus('error');
+  ws.onmessage = (event) => {
+    let msg;
+    try { msg = JSON.parse(event.data); } catch { return; }
+    if (msg.type === 'vehicle_update') handleVehicleUpdate(msg.data);
+    if (msg.type === 'stats')          updateStats(msg.data);
+    document.getElementById('status-time').textContent = new Date().toLocaleTimeString();
+  };
+}
+
+function tickClock() {
+  const now = new Date();
+  document.getElementById('status-time').textContent = now.toLocaleTimeString();
+  document.getElementById('hki-clock-time').textContent =
+    now.toLocaleTimeString('en-GB', { timeZone: HKI_TZ, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+tickClock();
+setInterval(tickClock, 1000);
+</script>
+</body>
+</html>
